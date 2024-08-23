@@ -1,0 +1,711 @@
+
+---
+title: "Individual Project"
+author: "Pratyush Rohilla"
+date: "2024-08-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rpart)
+library(rpart.plot)
+library(MASS)
+library(caret)
+library(randomForest)
+library(gbm)
+library(tidyverse)
+library(dplyr)
+library(BART)
+library(tree)
+library(cluster)
+```
+
+# reading of austin dataset and making another column as loglatestprice from latestprice, also dropping streetadress and description
+
+```{r}
+austin_data <- read.csv("austinhouses.csv")
+
+# Include all predictors except 'streetAddress' and 'description'
+austin_data <- austin_data %>%
+  select(-streetAddress, -description)
+
+# Add a new column 'logLatestPrice' based on 'latestPrice'
+austin_data <- austin_data %>%
+  mutate(logLatestPrice = log(latestPrice))
+
+# Display the first few rows of the modified dataset
+head(austin_data)
+```
+
+```{r}
+print(colnames(austin_data))
+```
+# printing out categorical variables
+
+```{r}
+str(austin_data)
+
+# Identify categorical variables based on the number of unique values
+categorical_vars <- sapply(austin_data, function(x) is.factor(x) || length(unique(x)) < 10)
+categorical_vars <- names(austin_data)[categorical_vars]
+
+# Print the categorical variables
+print("Categorical variables in the dataset:")
+print(categorical_vars)
+```
+
+# checking the correlation between loglatest price and numoofphotos.
+
+
+```{r}
+correlation <- cor(austin_data$numOfPhotos, austin_data$latestPrice, use = "complete.obs")
+print(correlation)
+```
+- Since we have a very weak correlation between the latest price and numOfPhotos, it is better to drop this column. also clubbing it with other columns would not increase the significance of it.
+- Also since the homeType has only one type of value which is "Single Family" its not telling us anything about the latest price and is redundant throughout the whole data set so we will drop it.
+- I will also drop hasGarage column since its a true and false values also the noofgarage column signifies the same thing if its false by the number 0 so it has no meaning and is only presenting redundant information.
+
+```{r}
+austin_data <- austin_data %>%
+select(-numOfPhotos)
+```
+```{r}
+austin_data <- austin_data %>%
+select(-homeType)
+```
+```{r}
+austin_data <- austin_data %>%
+select(-hasGarage)
+```
+
+# Calculate the age of the property
+```{r}
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+austin_data <- austin_data %>%
+  mutate(property_age = current_year - yearBuilt)
+```
+
+# Calculate the time since the last sale
+```{r}
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+austin_data <- austin_data %>%
+  mutate(time_since_last_sale = current_year - latest_saleyear)
+```
+
+# removing yearbuilt after calculating property_age column
+
+```{r}
+austin_data <- austin_data %>%
+select(-yearBuilt)
+```
+
+- Since we are already capturing the age of property and the time since last sale, along with this we also have sale month and sale year the latest sale date column has no significance, so we will drop it.
+
+
+# removing latest_salesdate and latest_salesyear
+
+```{r}
+austin_data <- austin_data %>%
+select(-latest_saledate)
+```
+
+```{r}
+austin_data <- austin_data %>%
+select(-latest_saleyear)
+```
+
+# printing the num rows in my dataset
+
+```{r}
+num_rows <- nrow(austin_data)
+print(num_rows)
+```
+
+
+# Convert binary columns to numeric
+```{r}
+austin_data <- austin_data %>%
+  mutate(
+    hasAssociation = as.numeric(hasAssociation),
+    hasSpa = as.numeric(hasSpa),
+    hasView = as.numeric(hasView)
+  )
+```
+
+```{r}
+austin_data <- austin_data %>%
+  mutate(combined_features = hasAssociation + hasSpa + hasView)
+```
+
+- Since we have made an another single column by the name of group_mean_price by associating "hasAssociation", "hasSpa", "hasView" columns we will drop these columns now.
+
+
+# after making the groupmeanprice column with has- columns, i am dropping these 3 columns
+
+```{r}
+austin_data <- austin_data %>%
+select(-hasAssociation, -hasSpa, -hasView)
+```
+
+# Perform k-means clustering
+```{r}
+set.seed(123)
+k <- 7  # Number of clusters
+kmeans_result <- kmeans(austin_data[, c("latitude", "longitude")], centers = k)
+```
+
+
+# Add the cluster assignments to the dataset
+```{r}
+austin_data$location_cluster <- kmeans_result$cluster
+```
+
+# Create a season feature
+```{r}
+austin_data <- austin_data %>%
+  mutate(season = case_when(
+    latest_salemonth %in% c(12, 1, 2) ~ "Winter",
+    latest_salemonth %in% c(3, 4, 5) ~ "Spring",
+    latest_salemonth %in% c(6, 7, 8) ~ "Summer",
+    latest_salemonth %in% c(9, 10, 11) ~ "Fall"
+  ))
+```
+
+# Convert season to a factor
+```{r}
+austin_data$season <- factor(austin_data$season, levels = c("Winter", "Spring", "Summer", "Fall"))
+```
+
+
+
+
+
+# Create the external_features column by summing up the specified columns
+```{r}
+austin_data <- austin_data %>%
+  mutate(external_features = numOfParkingFeatures + 
+                             numOfPatioAndPorchFeatures + 
+                             numOfSecurityFeatures + 
+                             numOfWaterfrontFeatures + 
+                             numOfWindowFeatures + 
+                             numOfCommunityFeatures)
+```
+
+
+# after making external_features as one column by summing up all the features columns i am dropping all these columns
+```{r}
+austin_data <- austin_data %>%
+select(-numOfParkingFeatures, 
+         -numOfPatioAndPorchFeatures, 
+         -numOfSecurityFeatures, 
+         -numOfWaterfrontFeatures, 
+         -numOfWindowFeatures, 
+         -numOfCommunityFeatures
+            )
+```
+
+```{r}
+austin_data <- austin_data %>%
+  mutate(external_features = external_features + numOfAccessibilityFeatures)
+```
+
+
+```{r}
+austin_data <- austin_data %>%
+select(-numOfAccessibilityFeatures)
+```
+
+# Create the total_amneties column by summing up the specified columns
+
+```{r}
+austin_data <- austin_data %>%
+  mutate(total_amneties = numOfBathrooms + 
+                             numOfBedrooms + 
+                             numOfStories + 
+                             numOfAppliances )
+```
+
+# after making total amneties as one column by summing up all the numof columns, i am dropping all these columns
+```{r}
+austin_data <- austin_data %>%
+select( -numOfBathrooms,
+        -numOfBedrooms,  
+        -numOfStories,
+        -numOfAppliances )
+```
+
+
+```{r}
+austin_data <- austin_data %>%
+  mutate(total_amneties = total_amneties + garageSpaces)
+```
+
+```{r}
+austin_data <- austin_data %>%
+select( -garageSpaces )
+```
+
+
+
+# Create ratio features
+#```{r}
+#austin_data <- austin_data %>%
+# mutate(
+#  size_to_students = avgSchoolSize / MedianStudentsPerTeacher
+# )
+#```
+
+
+
+#  (a) Split the data set into a training set and a test set.
+
+```{r}
+# Hold out 20% of the data as a final validation set
+train_ix = createDataPartition(austin_data$logLatestPrice, p = 0.8)
+austin_train = austin_data[train_ix$Resample1,]
+austin_test  = austin_data[-train_ix$Resample1,]
+```
+
+#---------------------------TREE-----AND--------PRUNEDTREE-----------------------------
+
+
+```{r}
+tree.austin_data <-tree(logLatestPrice ~ zipcode + latitude + longitude + latest_salemonth + lotSizeSqFt + livingAreaSqFt + avgSchoolDistance + avgSchoolRating + avgSchoolSize + MedianStudentsPerTeacher + time_since_last_sale + combined_features + location_cluster + season + property_age + external_features + total_amneties , austin_train)
+
+```
+
+```{r}
+ summary(tree.austin_data)
+```
+
+```{r}
+plot(tree.austin_data)
+text(tree.austin_data, pretty = 0,  cex = 0.7)
+```
+
+
+```{r}
+logpredictions <- predict(tree.austin_data, newdata = austin_test)
+predictions <- exp(logpredictions)
+actual_values <- austin_test$latestPrice
+mse <- mean((actual_values - predictions)^2)
+print(paste("Mean Squared Error: ", mse))
+```
+
+```{r}
+cv.austin <-cv.tree(tree.austin_data)
+```
+
+```{r}
+plot(cv.austin$size, cv.austin$dev, type = "b")
+```
+
+```{r}
+sizes <- cv.austin$size
+deviances <- cv.austin$dev
+min_deviance <- min(deviances)
+min_deviance_index <- which.min(deviances)
+min_size <- sizes[min_deviance_index]
+
+se <- sd(deviances) / sqrt(length(deviances))
+deviance_1se <- min_deviance + se
+
+bestsize <- sizes[which(deviances <= deviance_1se)][1]
+
+prune.austin <- prune.tree(tree.austin_data, best = bestsize)
+print(paste("The minimum tree size after cross validation: ",bestsize))
+print(paste("The optimal tree size(after pruning based on 1SE over best crossvalidation): ",min_size))
+```
+
+
+```{r}
+plot(prune.austin)
+text(prune.austin, pretty = 0, cex = 0.7)
+```
+
+
+```{r}
+log_predictions <- predict(prune.austin, newdata = austin_test)
+predictions <- exp(log_predictions)
+actual_values <- austin_test$latestPrice
+mse <- mean((actual_values - predictions)^2)
+print(paste("Mean Squared Error after 1SE rule: ", mse))
+```
+
+#------------------BAGGING-------------------------------------------------------------
+
+```{r}
+library(randomForest)
+
+bag.austin_data <- randomForest(logLatestPrice ~ zipcode + latitude + longitude + latest_salemonth + lotSizeSqFt + livingAreaSqFt + avgSchoolDistance + avgSchoolRating + avgSchoolSize + MedianStudentsPerTeacher + time_since_last_sale + combined_features + location_cluster + season + property_age + external_features + total_amneties , austin_train,mtry =17, importance = TRUE)
+bag.austin_data
+```
+
+```{r}
+logpredictions <- predict(bag.austin_data, newdata = austin_test)
+predictions <- exp(logpredictions)
+actual_values <- austin_test$latestPrice
+mse <- mean((actual_values - predictions)^2)
+print(paste("Mean Squared Error for Bagging: ", mse))
+```
+
+
+```{r}
+# VARIABLE IMPORTANCE
+important_variables <- importance(bag.austin_data)
+print(important_variables)
+
+```
+
+```{r}
+varImpPlot(bag.austin_data)
+```
+#-------------------------------RANDOMFOREST-------------------------------
+
+
+```{r}
+num_features_values = c(4, 5, 6, 7 , 8 , 9 ,10)
+
+
+evaluation_results <- matrix(NA, nrow = length(num_features_values), ncol = 2)
+colnames(evaluation_results) <- c("num_features", "MSE")
+
+
+for (index in 1:length(num_features_values)) {
+  num_features <- num_features_values[index]
+
+  
+rfmodel <- randomForest(logLatestPrice ~  zipcode + latitude + longitude + latest_salemonth + lotSizeSqFt + livingAreaSqFt + avgSchoolDistance + avgSchoolRating + avgSchoolSize + MedianStudentsPerTeacher + time_since_last_sale + combined_features + location_cluster + season + property_age + external_features + total_amneties , austin_train,mtry = num_features,importance = TRUE)
+
+  logpredictions <- predict(rfmodel, newdata = austin_test)
+  predictions <- exp(logpredictions)
+  actual_values <- austin_test$latestPrice
+  mse <- mean((actual_values - predictions)^2)
+  print(mse)
+  evaluation_results[index, ] <- c(num_features, mse)
+}
+print(evaluation_results)
+```
+
+```{r}
+results_df <- as.data.frame(evaluation_results)
+colnames(results_df) <- c("num_features", "MSE")
+print(results_df)
+```
+
+
+```{r}
+# Train the final random forest model with the best mtry value
+best_num_features <- results_df$num_features[which.min(results_df$MSE)]
+best_rf_model <- randomForest(logLatestPrice ~ zipcode + latitude + longitude + latest_salemonth + lotSizeSqFt + livingAreaSqFt + avgSchoolDistance + avgSchoolRating + avgSchoolSize + MedianStudentsPerTeacher + time_since_last_sale + combined_features + location_cluster + season + property_age + external_features + total_amneties, austin_train,
+  mtry = best_num_features,
+  importance = TRUE
+)
+
+importance_values <- importance(best_rf_model)
+varImpPlot(best_rf_model) 
+```
+
+
+```{r}
+
+library(BART)
+
+x_train <- as.data.frame(austin_train[, -which(names(austin_train) %in% c("loglatestPrice", "latestPrice"))])
+y_train <- austin_train$logLatestPrice
+
+x_test <- as.data.frame(austin_test[, -which(names(austin_test) %in% c("loglatestPrice", "latestPrice"))])
+y_test <- austin_test$logLatestPrice
+
+# Fit the BART model
+bartfit <- gbart(x_train, y_train, x.test = x_test)
+
+yhat_bart_log <- bartfit$yhat.test.mean
+yhat_bart <- exp(yhat_bart_log)
+y_test_exp <- exp(y_test)
+mse <- mean((y_test_exp - yhat_bart)^2)
+```
+
+```{r}
+print(paste("The MSE for BART: ",mse))
+```
+
+```{r}
+ord <- order(bartfit$varcount.mean , decreasing = T)
+bartfit$varcount.mean[ord]
+```
+
+
+- The MSE for BART:  12766.1489802102
+- The MSE for RANDOMFOREST: mtry(9)	68338.38	
+- The MSE for Bagging:  66664.2998034025
+- The MSE for Tree and Pruned Tree: 104917.496891454
+
+
+
+
+
+
+#-------------------------------------------------------------------------------------
+
+```{r}
+austin_data2 <- read.csv("austinhouses_holdout.csv")
+
+# Include all predictors except 'streetAddress' and 'description'
+austin_data2 <- austin_data2 %>%
+  select(-streetAddress, -description)
+
+# Add a new column 'logLatestPrice' based on 'latestPrice'
+austin_data2 <- austin_data2 %>%
+  mutate(logLatestPrice = log(latestPrice))
+
+# Display the first few rows of the modified dataset
+head(austin_data2)
+```
+# Handling missing values
+```{r}
+austin_data2[is.na(austin_data2)] <- -1
+austin_data2 <- austin_data2 %>%
+  drop_na()
+```
+
+```{r}
+print(colnames(austin_data2))
+```
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-numOfPhotos)
+```
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-homeType)
+```
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-hasGarage)
+```
+
+
+# Calculate the age of the property
+```{r}
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+austin_data2 <- austin_data2 %>%
+  mutate(property_age = current_year - yearBuilt)
+```
+
+# Calculate the time since the last sale
+```{r}
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+austin_data2 <- austin_data2 %>%
+  mutate(time_since_last_sale = current_year - latest_saleyear)
+```
+
+# removing yearbuilt after calculating property_age column
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-yearBuilt)
+```
+
+# removing latest_salesdate and latest_salesyear
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-latest_saledate)
+```
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-latest_saleyear)
+```
+
+# printing the num rows in my dataset
+
+```{r}
+num_rows <- nrow(austin_data2)
+print(num_rows)
+```
+
+# Convert binary columns to numeric
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(
+    hasAssociation = as.numeric(hasAssociation),
+    hasSpa = as.numeric(hasSpa),
+    hasView = as.numeric(hasView)
+    
+  )
+```
+
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(combined_features = hasAssociation + hasSpa + hasView)
+```
+
+
+# after making the groupmeanprice column with has- columns, i am dropping these 3 columns
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-hasAssociation, -hasSpa, -hasView)
+```
+
+# Perform k-means clustering
+```{r}
+set.seed(123)
+k <- 7  # Number of clusters
+kmeans_result <- kmeans(austin_data2[, c("latitude", "longitude")], centers = k)
+```
+
+
+# Add the cluster assignments to the dataset
+```{r}
+austin_data2$location_cluster <- kmeans_result$cluster
+```
+
+# Create a season feature
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(season = case_when(
+    latest_salemonth %in% c(12, 1, 2) ~ "Winter",
+    latest_salemonth %in% c(3, 4, 5) ~ "Spring",
+    latest_salemonth %in% c(6, 7, 8) ~ "Summer",
+    latest_salemonth %in% c(9, 10, 11) ~ "Fall"
+  ))
+```
+
+# Convert season to a factor
+```{r}
+austin_data2$season <- factor(austin_data2$season, levels = c("Winter", "Spring", "Summer", "Fall"))
+```
+
+
+
+
+
+# Create the external_features column by summing up the specified columns
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(external_features = numOfParkingFeatures + 
+                             numOfPatioAndPorchFeatures + 
+                             numOfSecurityFeatures + 
+                             numOfWaterfrontFeatures + 
+                             numOfWindowFeatures + 
+                             numOfCommunityFeatures)
+```
+
+
+# after making external_features as one column by summing up all the features columns i am dropping all these columns
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-numOfParkingFeatures, 
+         -numOfPatioAndPorchFeatures, 
+         -numOfSecurityFeatures, 
+         -numOfWaterfrontFeatures, 
+         -numOfWindowFeatures, 
+         -numOfCommunityFeatures
+            )
+```
+
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(external_features = external_features + numOfAccessibilityFeatures)
+```
+
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select(-numOfAccessibilityFeatures)
+```
+
+# Create the total_amneties column by summing up the specified columns
+
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(total_amneties = numOfBathrooms + 
+                             numOfBedrooms + 
+                             numOfStories + 
+                             numOfAppliances )
+```
+
+# after making total amneties as one column by summing up all the numof columns, i am dropping all these columns
+```{r}
+austin_data2 <- austin_data2 %>%
+select( -numOfBathrooms,
+        -numOfBedrooms,  
+        -numOfStories,
+        -numOfAppliances )
+```
+
+
+```{r}
+austin_data2 <- austin_data2 %>%
+  mutate(total_amneties = total_amneties + garageSpaces)
+```
+
+```{r}
+austin_data2 <- austin_data2 %>%
+select( -garageSpaces )
+```
+
+
+
+```{r}
+# Ensure consistent columns between austin_data and austin_data2
+common_columns <- intersect(colnames(austin_data), colnames(austin_data2))
+austin_data <- austin_data[, common_columns]
+austin_data2 <- austin_data2[, common_columns]
+
+# Print dimensions of the data to check for consistency
+print(paste("Dimensions of austin_data:", dim(austin_data)))
+print(paste("Dimensions of austin_data2:", dim(austin_data2)))
+
+# Prepare training and testing data
+x_train <- as.data.frame(austin_data[, -which(names(austin_data) %in% c("logLatestPrice", "latestPrice"))])
+y_train <- austin_data$logLatestPrice
+
+x_test <- as.data.frame(austin_data2[, -which(names(austin_data2) %in% c("logLatestPrice", "latestPrice"))])
+y_test <- austin_data2$logLatestPrice
+
+# Print dimensions of the training and test sets
+print(paste("Dimensions of x_train:", dim(x_train)))
+print(paste("Length of y_train:", length(y_train)))
+print(paste("Dimensions of x_test:", dim(x_test)))
+print(paste("Length of y_test:", length(y_test)))
+
+# Check for missing values
+print(paste("Number of missing values in x_train:", sum(is.na(x_train))))
+print(paste("Number of missing values in y_train:", sum(is.na(y_train))))
+print(paste("Number of missing values in x_test:", sum(is.na(x_test))))
+print(paste("Number of missing values in y_test:", sum(is.na(y_test))))
+```
+```{r}
+# Check for missing values in logLatestPrice in austin_data2
+sum(is.na(austin_data2$logLatestPrice))
+
+```
+
+# After comparing the MSE values of the models, the BART model had the lowest MSE. However, due to overfitting, I opted to use the second-best model, Bagging, instead.
+
+
+```{r}
+library(randomForest)
+
+bag.austin_data_bg <- randomForest(logLatestPrice ~ zipcode + latitude + longitude + latest_salemonth + lotSizeSqFt + livingAreaSqFt + avgSchoolDistance + avgSchoolRating + avgSchoolSize + MedianStudentsPerTeacher + time_since_last_sale + combined_features + location_cluster + season + property_age + external_features + total_amneties , austin_data,mtry =17, importance = TRUE)
+bag.austin_data_bg
+```
+
+```{r}
+logpredictions <- predict(bag.austin_data_bg, newdata = austin_data2)
+predictions <- exp(logpredictions)
+austin_data2$latestPrice <-predictions
+```
+
+#```{r}
+#write.csv(austin_data2, "test_bag.csv",row.names = FALSE)
+#```
